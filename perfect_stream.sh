@@ -212,9 +212,28 @@ for i in "${!SOURCE_URLS[@]}"; do
 done
 
 echo "🌐 بدء nginx..."
-nginx -c "$NGINX_CONF" &
-NGINX_PID=$!
-sleep 1
+nginx -c "$NGINX_CONF"
+
+if [ $? -ne 0 ]; then
+    echo "❌ فشل بدء nginx - التحقق من السجلات"
+    cat "$WORK_DIR/stream/logs/nginx_error.log" 2>/dev/null || true
+    exit 1
+fi
+
+NGINX_PID=$(cat "$WORK_DIR/stream/logs/nginx.pid" 2>/dev/null)
+echo "✅ Nginx بدأ بنجاح (PID: $NGINX_PID) على المنفذ $PORT"
+
+sleep 2
+
+echo "🔍 التحقق من فتح المنفذ $PORT..."
+for i in {1..10}; do
+    if curl -s http://localhost:$PORT/health > /dev/null 2>&1; then
+        echo "✅ المنفذ $PORT جاهز ويستجيب"
+        break
+    fi
+    echo "⏳ انتظار فتح المنفذ... ($i/10)"
+    sleep 1
+done
 
 # لا حاجة لـ Admin API - استخدام مباشر فقط
 
@@ -380,18 +399,6 @@ monitor_ffmpeg() {
     done
 }
 
-# بدء المراقبة (إن وجدت قنوات)
-if [ ${#SOURCE_URLS[@]} -gt 0 ]; then
-    for i in "${!SOURCE_URLS[@]}"; do
-        monitor_ffmpeg $i &
-        MONITOR_PIDS[$i]=$!
-    done
-fi
-
-# بدء مراقبة ملف التحكم
-watch_control_file &
-WATCH_PID=$!
-
 # دالة إيقاف
 cleanup() {
     echo "🛑 إيقاف الخدمات..."
@@ -402,7 +409,7 @@ cleanup() {
         kill $pid 2>/dev/null || true
     done
     [ -n "$WATCH_PID" ] && kill $WATCH_PID 2>/dev/null || true
-    kill $NGINX_PID 2>/dev/null || true
+    nginx -s stop 2>/dev/null || pkill nginx 2>/dev/null || true
     echo "✅ تم الإيقاف"
 }
 
@@ -467,6 +474,18 @@ watch_control_file() {
         fi
     done
 }
+
+# بدء المراقبة (إن وجدت قنوات)
+if [ ${#SOURCE_URLS[@]} -gt 0 ]; then
+    for i in "${!SOURCE_URLS[@]}"; do
+        monitor_ffmpeg $i &
+        MONITOR_PIDS[$i]=$!
+    done
+fi
+
+# بدء مراقبة ملف التحكم
+watch_control_file &
+WATCH_PID=$!
 
 trap cleanup EXIT INT TERM
 
